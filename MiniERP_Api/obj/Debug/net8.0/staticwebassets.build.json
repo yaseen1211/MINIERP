@@ -1,0 +1,11 @@
+{
+  "Version": 1,
+  "Hash": "gC+8YuLiv+sBiyNQvHixmkMB/36MKGO9hs9K35MpIU8=",
+  "Source": "MiniERP_Api",
+  "BasePath": "_content/MiniERP_Api",
+  "Mode": "Default",
+  "ManifestType": "Build",
+  "ReferencedProjectsConfiguration": [],
+  "DiscoveryPatterns": [],
+  "Assets": []
+}

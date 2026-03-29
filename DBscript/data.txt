@@ -1,0 +1,254 @@
+INSERT INTO [MINIERP_DB].[dbo].[Roles] ([Name])
+VALUES 
+    ('Admin'),
+    ('User');
+
+-----------------------------------------------------------------------
+CREATE PROCEDURE InsertSale
+    @CustomerId INT,
+    @CreatedBy INT,
+    @Items NVARCHAR(MAX)
+AS
+BEGIN
+    SET NOCOUNT ON;
+
+    BEGIN TRANSACTION;
+
+    BEGIN TRY
+
+        DECLARE @SaleId INT;
+        DECLARE @TotalAmount DECIMAL(10,2) = 0;
+
+        --  TEMP TABLE FOR JSON DATA
+        DECLARE @TempItems TABLE
+        (
+            ProductId INT,
+            Quantity INT,
+            UnitPrice DECIMAL(10,2)
+        );
+
+        --  PARSE JSON
+        INSERT INTO @TempItems
+        SELECT ProductId, Quantity, UnitPrice
+        FROM OPENJSON(@Items)
+        WITH (
+            ProductId INT,
+            Quantity INT,
+            UnitPrice DECIMAL(10,2)
+        );
+
+        --  STOCK CHECK
+        IF EXISTS (
+            SELECT 1
+            FROM @TempItems t
+            WHERE (
+                SELECT ISNULL(SUM(QuantityIn - QuantityOut), 0)
+                FROM StockLedger
+                WHERE ProductId = t.ProductId
+            ) < t.Quantity
+        )
+        BEGIN
+            SELECT 
+                CAST(0 AS BIT) AS Success,
+                'Insufficient stock' AS Message;
+
+            ROLLBACK TRANSACTION;
+            RETURN;
+        END
+
+        -- INSERT SALE
+        INSERT INTO Sales (CustomerId, CreatedBy, SaleDate, TotalAmount)
+        VALUES (@CustomerId, @CreatedBy, GETDATE(), 0);
+
+        SET @SaleId = SCOPE_IDENTITY();
+
+        -- INSERT SALE ITEMS
+        INSERT INTO SaleItems (SaleId, ProductId, Quantity, UnitPrice, TotalPrice)
+        SELECT
+            @SaleId,
+            ProductId,
+            Quantity,
+            UnitPrice,
+            Quantity * UnitPrice
+        FROM @TempItems;
+
+        --  CALCULATE TOTAL
+        SELECT @TotalAmount = SUM(Quantity * UnitPrice)
+        FROM @TempItems;
+
+        --  UPDATE TOTAL
+        UPDATE Sales
+        SET TotalAmount = @TotalAmount
+        WHERE Id = @SaleId;
+
+        --  STOCK LEDGER (OUT)
+        INSERT INTO StockLedger 
+        (ProductId, QuantityIn, QuantityOut, ReferenceType, ReferenceId, CreatedAt)
+        SELECT
+            ProductId,
+            0,
+            Quantity,
+            'Sale',
+            @SaleId,
+            GETDATE()
+        FROM @TempItems;
+
+        COMMIT TRANSACTION;
+
+        -- SUCCESS RESPONSE
+        SELECT 
+            CAST(1 AS BIT) AS Success,
+            'Sale created successfully' AS Message;
+
+    END TRY
+    BEGIN CATCH
+
+        ROLLBACK TRANSACTION;
+
+        SELECT 
+            CAST(0 AS BIT) AS Success,
+            ERROR_MESSAGE() AS Message;
+
+    END CATCH
+END
+
+-----------------------------------------------------------------------
+-- ManageRole: Mode 1=Insert, 2=Select, 3=Update, 4=Delete
+CREATE PROCEDURE ManageRole
+    @Mode INT,
+    @Id   INT            = NULL,
+    @Name NVARCHAR(100)  = NULL
+AS
+BEGIN
+    SET NOCOUNT ON;
+    BEGIN TRY
+        IF @Mode = 1
+        BEGIN
+            INSERT INTO Roles (Name) VALUES (@Name);
+            SELECT CAST(1 AS BIT) AS Success, 'Role created successfully' AS Message;
+        END
+        ELSE IF @Mode = 3
+        BEGIN
+            UPDATE Roles SET Name = @Name WHERE Id = @Id;
+            SELECT CAST(1 AS BIT) AS Success, 'Role updated successfully' AS Message;
+        END
+        ELSE IF @Mode = 4
+        BEGIN
+            DELETE FROM Roles WHERE Id = @Id;
+            SELECT CAST(1 AS BIT) AS Success, 'Role deleted successfully' AS Message;
+        END
+    END TRY
+    BEGIN CATCH
+        SELECT CAST(0 AS BIT) AS Success, ERROR_MESSAGE() AS Message;
+    END CATCH
+END
+
+-----------------------------------------------------------------------
+-- ManageProduct: Mode 1=Insert, 2=Select, 3=Update, 4=SoftDelete
+CREATE PROCEDURE ManageProduct
+    @Mode        INT,
+    @Id          INT            = NULL,
+    @ProductName NVARCHAR(255)  = NULL,
+    @StockQty    INT            = 0,
+    @Price       DECIMAL(8,2)   = 0
+AS
+BEGIN
+    SET NOCOUNT ON;
+    BEGIN TRY
+        IF @Mode = 1
+        BEGIN
+            INSERT INTO Products (ProductName, StockQty, Price, IsActive, CreatedAt)
+            VALUES (@ProductName, @StockQty, @Price, 1, GETDATE());
+            INSERT INTO StockLedger (ProductId, QuantityIn, QuantityOut, ReferenceType, ReferenceId, CreatedAt)
+            VALUES (SCOPE_IDENTITY(), @StockQty, 0, 'Initial', 0, GETDATE());
+            SELECT CAST(1 AS BIT) AS Success, 'Product created successfully' AS Message;
+        END
+        ELSE IF @Mode = 3
+        BEGIN
+            UPDATE Products SET ProductName = @ProductName, Price = @Price WHERE id = @Id;
+            SELECT CAST(1 AS BIT) AS Success, 'Product updated successfully' AS Message;
+        END
+        ELSE IF @Mode = 4
+        BEGIN
+            UPDATE Products SET IsActive = 0 WHERE id = @Id;
+            SELECT CAST(1 AS BIT) AS Success, 'Product deleted successfully' AS Message;
+        END
+    END TRY
+    BEGIN CATCH
+        SELECT CAST(0 AS BIT) AS Success, ERROR_MESSAGE() AS Message;
+    END CATCH
+END
+
+-----------------------------------------------------------------------
+-- ManageCustomer: Mode 1=Insert, 2=Select, 3=Update, 4=Delete
+CREATE PROCEDURE ManageCustomer
+    @Mode    INT,
+    @Id      INT            = NULL,
+    @Name    NVARCHAR(255)  = NULL,
+    @Phone   NVARCHAR(50)   = NULL,
+    @Address NVARCHAR(500)  = NULL
+AS
+BEGIN
+    SET NOCOUNT ON;
+    BEGIN TRY
+        IF @Mode = 1
+        BEGIN
+            INSERT INTO Customers (Name, Phone, Address, CreatedAt)
+            VALUES (@Name, @Phone, @Address, GETDATE());
+            SELECT CAST(1 AS BIT) AS Success, 'Customer created successfully' AS Message;
+        END
+        ELSE IF @Mode = 3
+        BEGIN
+            UPDATE Customers SET Name = @Name, Phone = @Phone, Address = @Address WHERE Id = @Id;
+            SELECT CAST(1 AS BIT) AS Success, 'Customer updated successfully' AS Message;
+        END
+        ELSE IF @Mode = 4
+        BEGIN
+            DELETE FROM Customers WHERE Id = @Id;
+            SELECT CAST(1 AS BIT) AS Success, 'Customer deleted successfully' AS Message;
+        END
+    END TRY
+    BEGIN CATCH
+        SELECT CAST(0 AS BIT) AS Success, ERROR_MESSAGE() AS Message;
+    END CATCH
+END
+
+-----------------------------------------------------------------------
+-- ManageReport: Mode 1=TotalSalesToday, 2=Revenue, 3=TopProducts,
+--               4=TopCustomers, 5=LowStock, 6=StockSummary, 7=MonthlySales
+CREATE PROCEDURE ManageReport
+    @Mode     INT,
+    @FromDate DATETIME = NULL,
+    @ToDate   DATETIME = NULL
+AS
+BEGIN
+    SET NOCOUNT ON;
+    IF @Mode = 1
+        SELECT SUM(TotalAmount) AS Total
+        FROM Sales WHERE CAST(SaleDate AS DATE) = CAST(GETDATE() AS DATE);
+    ELSE IF @Mode = 2
+        SELECT SUM(TotalAmount) AS Total
+        FROM Sales WHERE SaleDate >= @FromDate AND SaleDate <= @ToDate;
+    ELSE IF @Mode = 3
+        SELECT TOP 5 p.ProductName AS Product, SUM(si.Quantity) AS Quantity
+        FROM SaleItems si JOIN Products p ON si.ProductId = p.id
+        GROUP BY p.ProductName ORDER BY Quantity DESC;
+    ELSE IF @Mode = 4
+        SELECT TOP 5 c.Name AS Customer, SUM(s.TotalAmount) AS Total
+        FROM Sales s JOIN Customers c ON s.CustomerId = c.Id
+        GROUP BY c.Name ORDER BY Total DESC;
+    ELSE IF @Mode = 5
+        SELECT p.ProductName AS Product, SUM(sl.QuantityIn - sl.QuantityOut) AS Stock
+        FROM StockLedger sl JOIN Products p ON sl.ProductId = p.id
+        GROUP BY p.ProductName
+        HAVING SUM(sl.QuantityIn - sl.QuantityOut) < 5;
+    ELSE IF @Mode = 6
+        SELECT p.ProductName AS Product, SUM(sl.QuantityIn - sl.QuantityOut) AS Stock
+        FROM StockLedger sl JOIN Products p ON sl.ProductId = p.id
+        GROUP BY p.ProductName;
+    ELSE IF @Mode = 7
+        SELECT YEAR(SaleDate) AS Year, MONTH(SaleDate) AS Month, SUM(TotalAmount) AS Total
+        FROM Sales
+        GROUP BY YEAR(SaleDate), MONTH(SaleDate)
+        ORDER BY Year, Month;
+END
