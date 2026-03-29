@@ -1,10 +1,11 @@
-INSERT INTO [MINIERP_DB].[dbo].[Roles] ([Name])
-VALUES 
-    ('Admin'),
-    ('User');
-
------------------------------------------------------------------------
-CREATE PROCEDURE InsertSale
+USE [MINIERP_DB]
+GO
+/****** Object:  StoredProcedure [dbo].[InsertSale]    Script Date: 30-03-2026 02:15:09 AM ******/
+SET ANSI_NULLS ON
+GO
+SET QUOTED_IDENTIFIER ON
+GO
+CREATE PROCEDURE [dbo].[InsertSale]
     @CustomerId INT,
     @CreatedBy INT,
     @Items NVARCHAR(MAX)
@@ -19,7 +20,7 @@ BEGIN
         DECLARE @SaleId INT;
         DECLARE @TotalAmount DECIMAL(10,2) = 0;
 
-        --  TEMP TABLE FOR JSON DATA
+        -- 🔹 TEMP TABLE FOR JSON DATA
         DECLARE @TempItems TABLE
         (
             ProductId INT,
@@ -27,7 +28,7 @@ BEGIN
             UnitPrice DECIMAL(10,2)
         );
 
-        --  PARSE JSON
+        -- 🔹 PARSE JSON
         INSERT INTO @TempItems
         SELECT ProductId, Quantity, UnitPrice
         FROM OPENJSON(@Items)
@@ -37,7 +38,7 @@ BEGIN
             UnitPrice DECIMAL(10,2)
         );
 
-        --  STOCK CHECK
+        -- 🔥 STOCK CHECK
         IF EXISTS (
             SELECT 1
             FROM @TempItems t
@@ -56,13 +57,13 @@ BEGIN
             RETURN;
         END
 
-        -- INSERT SALE
+        -- ✅ INSERT SALE
         INSERT INTO Sales (CustomerId, CreatedBy, SaleDate, TotalAmount)
         VALUES (@CustomerId, @CreatedBy, GETDATE(), 0);
 
         SET @SaleId = SCOPE_IDENTITY();
 
-        -- INSERT SALE ITEMS
+        -- ✅ INSERT SALE ITEMS
         INSERT INTO SaleItems (SaleId, ProductId, Quantity, UnitPrice, TotalPrice)
         SELECT
             @SaleId,
@@ -72,16 +73,16 @@ BEGIN
             Quantity * UnitPrice
         FROM @TempItems;
 
-        --  CALCULATE TOTAL
+        -- 🔹 CALCULATE TOTAL
         SELECT @TotalAmount = SUM(Quantity * UnitPrice)
         FROM @TempItems;
 
-        --  UPDATE TOTAL
+        -- ✅ UPDATE TOTAL
         UPDATE Sales
         SET TotalAmount = @TotalAmount
         WHERE Id = @SaleId;
 
-        --  STOCK LEDGER (OUT)
+        -- 🔻 STOCK LEDGER (OUT)
         INSERT INTO StockLedger 
         (ProductId, QuantityIn, QuantityOut, ReferenceType, ReferenceId, CreatedAt)
         SELECT
@@ -95,7 +96,7 @@ BEGIN
 
         COMMIT TRANSACTION;
 
-        -- SUCCESS RESPONSE
+        -- ✅ SUCCESS RESPONSE
         SELECT 
             CAST(1 AS BIT) AS Success,
             'Sale created successfully' AS Message;
@@ -111,41 +112,124 @@ BEGIN
 
     END CATCH
 END
-
------------------------------------------------------------------------
--- ManageRole: Mode 1=Insert, 2=Select, 3=Update, 4=Delete
-CREATE PROCEDURE ManageRole
-    @Mode INT,
-    @Id   INT            = NULL,
-    @Name NVARCHAR(100)  = NULL
+GO
+/****** Object:  StoredProcedure [dbo].[ManageCustomer]    Script Date: 30-03-2026 02:15:09 AM ******/
+SET ANSI_NULLS ON
+GO
+SET QUOTED_IDENTIFIER ON
+GO
+CREATE PROCEDURE [dbo].[ManageCustomer]
+(
+    @Name        NVARCHAR(250) = NULL,
+    @Phone       NVARCHAR(250) = NULL,
+    @Address     NVARCHAR(250) = NULL,
+    @CustomerId  INT = NULL,
+    @Mode        INT
+)
 AS
 BEGIN
     SET NOCOUNT ON;
+
     BEGIN TRY
-        IF @Mode = 1
+
+        -- MODE VALIDATION
+        IF @Mode NOT IN (1,2,3,4)
         BEGIN
-            INSERT INTO Roles (Name) VALUES (@Name);
-            SELECT CAST(1 AS BIT) AS Success, 'Role created successfully' AS Message;
+            RAISERROR('Invalid Mode. Use 1=Insert, 2=Select, 3=Update, 4=Delete.',16,1);
+            RETURN;
         END
+
+        ---------------------------------------------------
+        -- INSERT
+        ---------------------------------------------------
+       IF @Mode = 1
+		BEGIN
+			INSERT INTO Customers (Name, Phone, Address, CreatedAt)
+			VALUES (@Name, @Phone, @Address, GETDATE());
+
+			SELECT 
+				CAST(1 AS BIT) AS Success,
+				'Customer inserted successfully.' AS Message;
+		END
+
+        ---------------------------------------------------
+        -- UPDATE
+        ---------------------------------------------------
         ELSE IF @Mode = 3
-        BEGIN
-            UPDATE Roles SET Name = @Name WHERE Id = @Id;
-            SELECT CAST(1 AS BIT) AS Success, 'Role updated successfully' AS Message;
-        END
+		BEGIN
+			IF @CustomerId IS NULL
+			BEGIN
+				SELECT 
+					CAST(0 AS BIT) AS Success,
+					'CustomerId is required for update.' AS Message;
+				RETURN;
+			END
+
+			IF NOT EXISTS (SELECT 1 FROM Customers WHERE Id = @CustomerId)
+			BEGIN
+				SELECT 
+					CAST(0 AS BIT) AS Success,
+					'Customer not found.' AS Message;
+				RETURN;
+			END
+
+			UPDATE Customers
+			SET 
+				Name = @Name,
+				Phone = @Phone,
+				Address = @Address
+			WHERE Id = @CustomerId;
+
+			SELECT 
+				CAST(1 AS BIT) AS Success,
+				'Customer updated successfully.' AS Message;
+		END
+
+        ---------------------------------------------------
+        -- DELETE
+        ---------------------------------------------------
         ELSE IF @Mode = 4
-        BEGIN
-            DELETE FROM Roles WHERE Id = @Id;
-            SELECT CAST(1 AS BIT) AS Success, 'Role deleted successfully' AS Message;
-        END
+		BEGIN
+			IF @CustomerId IS NULL
+			BEGIN
+				SELECT 
+					CAST(0 AS BIT) AS Success,
+					'CustomerId is required for delete.' AS Message;
+				RETURN;
+			END
+
+			IF NOT EXISTS (SELECT 1 FROM Customers WHERE Id = @CustomerId)
+			BEGIN
+				SELECT 
+					CAST(0 AS BIT) AS Success,
+					'Customer not found.' AS Message;
+				RETURN;
+			END
+
+			DELETE FROM Customers
+			WHERE Id = @CustomerId;
+
+			SELECT 
+				CAST(1 AS BIT) AS Success,
+				'Customer deleted successfully.' AS Message;
+		END
+
     END TRY
     BEGIN CATCH
-        SELECT CAST(0 AS BIT) AS Success, ERROR_MESSAGE() AS Message;
+        SELECT 
+            ERROR_MESSAGE() AS ErrorMessage,
+            ERROR_NUMBER() AS ErrorNumber,
+            ERROR_LINE() AS ErrorLine;
     END CATCH
-END
 
------------------------------------------------------------------------
--- ManageProduct: Mode 1=Insert, 2=Select, 3=Update, 4=SoftDelete
-CREATE PROCEDURE ManageProduct
+END;
+GO
+/****** Object:  StoredProcedure [dbo].[ManageProduct]    Script Date: 30-03-2026 02:15:09 AM ******/
+SET ANSI_NULLS ON
+GO
+SET QUOTED_IDENTIFIER ON
+GO
+CREATE PROCEDURE [dbo].[ManageProduct]
     @Mode        INT,
     @Id          INT            = NULL,
     @ProductName NVARCHAR(255)  = NULL,
@@ -178,45 +262,13 @@ BEGIN
         SELECT CAST(0 AS BIT) AS Success, ERROR_MESSAGE() AS Message;
     END CATCH
 END
-
------------------------------------------------------------------------
--- ManageCustomer: Mode 1=Insert, 2=Select, 3=Update, 4=Delete
-CREATE PROCEDURE ManageCustomer
-    @Mode    INT,
-    @Id      INT            = NULL,
-    @Name    NVARCHAR(255)  = NULL,
-    @Phone   NVARCHAR(50)   = NULL,
-    @Address NVARCHAR(500)  = NULL
-AS
-BEGIN
-    SET NOCOUNT ON;
-    BEGIN TRY
-        IF @Mode = 1
-        BEGIN
-            INSERT INTO Customers (Name, Phone, Address, CreatedAt)
-            VALUES (@Name, @Phone, @Address, GETDATE());
-            SELECT CAST(1 AS BIT) AS Success, 'Customer created successfully' AS Message;
-        END
-        ELSE IF @Mode = 3
-        BEGIN
-            UPDATE Customers SET Name = @Name, Phone = @Phone, Address = @Address WHERE Id = @Id;
-            SELECT CAST(1 AS BIT) AS Success, 'Customer updated successfully' AS Message;
-        END
-        ELSE IF @Mode = 4
-        BEGIN
-            DELETE FROM Customers WHERE Id = @Id;
-            SELECT CAST(1 AS BIT) AS Success, 'Customer deleted successfully' AS Message;
-        END
-    END TRY
-    BEGIN CATCH
-        SELECT CAST(0 AS BIT) AS Success, ERROR_MESSAGE() AS Message;
-    END CATCH
-END
-
------------------------------------------------------------------------
--- ManageReport: Mode 1=TotalSalesToday, 2=Revenue, 3=TopProducts,
---               4=TopCustomers, 5=LowStock, 6=StockSummary, 7=MonthlySales
-CREATE PROCEDURE ManageReport
+GO
+/****** Object:  StoredProcedure [dbo].[ManageReport]    Script Date: 30-03-2026 02:15:09 AM ******/
+SET ANSI_NULLS ON
+GO
+SET QUOTED_IDENTIFIER ON
+GO
+CREATE PROCEDURE [dbo].[ManageReport]
     @Mode     INT,
     @FromDate DATETIME = NULL,
     @ToDate   DATETIME = NULL
@@ -252,3 +304,39 @@ BEGIN
         GROUP BY YEAR(SaleDate), MONTH(SaleDate)
         ORDER BY Year, Month;
 END
+GO
+/****** Object:  StoredProcedure [dbo].[ManageRole]    Script Date: 30-03-2026 02:15:09 AM ******/
+SET ANSI_NULLS ON
+GO
+SET QUOTED_IDENTIFIER ON
+GO
+CREATE PROCEDURE [dbo].[ManageRole]
+    @Mode INT,
+    @Id   INT            = NULL,
+    @Name NVARCHAR(100)  = NULL
+AS
+BEGIN
+    SET NOCOUNT ON;
+    BEGIN TRY
+        IF @Mode = 1
+        BEGIN
+            INSERT INTO Roles (Name) VALUES (@Name);
+            SELECT CAST(1 AS BIT) AS Success, 'Role created successfully' AS Message;
+        END
+        ELSE IF @Mode = 3
+        BEGIN
+            UPDATE Roles SET Name = @Name WHERE Id = @Id;
+            SELECT CAST(1 AS BIT) AS Success, 'Role updated successfully' AS Message;
+        END
+        ELSE IF @Mode = 4
+        BEGIN
+            DELETE FROM Roles WHERE Id = @Id;
+            SELECT CAST(1 AS BIT) AS Success, 'Role deleted successfully' AS Message;
+        END
+    END TRY
+    BEGIN CATCH
+        SELECT CAST(0 AS BIT) AS Success, ERROR_MESSAGE() AS Message;
+    END CATCH
+END
+
+GO
